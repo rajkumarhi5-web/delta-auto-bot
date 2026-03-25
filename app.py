@@ -5,45 +5,24 @@ import os
 
 app = Flask(__name__)
 
-# ===== EXCHANGE =====
+# ===== EXCHANGE SETUP =====
 exchange = ccxt.delta({
     'apiKey': os.getenv("API_KEY"),
     'secret': os.getenv("API_SECRET"),
     'enableRateLimit': True
 })
 
-# ===== CHANGE AFTER CHECKING /all-symbols =====
-# 👉 initially empty (safe)
-SYMBOLS = []
+# ===== FINAL SYMBOLS =====
+SYMBOLS = [
+    "XRP/USDT",
+    "SOL/USDT"
+]
 
 TIMEFRAME = '5m'
 TRADE_SIZE = 1
 
 last_signal = {}
 trade_log = {}
-
-# ===== LOAD MARKETS (IMPORTANT) =====
-def load_markets_safe():
-    try:
-        return exchange.load_markets()
-    except Exception as e:
-        return str(e)
-
-# ===== ALL SYMBOLS (DEBUG TOOL) =====
-@app.route('/all-symbols')
-def all_symbols():
-    markets = load_markets_safe()
-    if isinstance(markets, str):
-        return jsonify({"error": markets})
-
-    # Filter: only active + derivatives-like symbols
-    symbols = []
-    for s, m in markets.items():
-        if m.get('active'):
-            symbols.append(s)
-
-    # first 100 for mobile view
-    return jsonify(symbols[:100])
 
 # ===== FETCH DATA =====
 def get_data(symbol):
@@ -54,14 +33,15 @@ def get_data(symbol):
     except Exception as e:
         return str(e)
 
-# ===== STRATEGY =====
+# ===== STRATEGY (SMART + SAFE) =====
 def strategy(df):
     df['ema9'] = df['close'].ewm(span=9).mean()
     df['ema21'] = df['close'].ewm(span=21).mean()
 
-    # volume filter
+    # Volume filter (important 🔥)
     avg_vol = df['volume'].mean()
     last_vol = df['volume'].iloc[-1]
+
     if last_vol < avg_vol:
         return None
 
@@ -69,9 +49,10 @@ def strategy(df):
         return "buy"
     elif df['ema9'].iloc[-1] < df['ema21'].iloc[-1]:
         return "sell"
+
     return None
 
-# ===== EXECUTE =====
+# ===== EXECUTE TRADE =====
 def execute_trade(symbol, signal):
     global last_signal
 
@@ -82,10 +63,11 @@ def execute_trade(symbol, signal):
         ticker = exchange.fetch_ticker(symbol)
         price = ticker['last']
 
-        # SAFE MODE
-        result = f"{signal.upper()} signal"
+        # SAFE MODE (no real trade yet)
+        result = f"{signal.upper()} signal detected"
 
         last_signal[symbol] = signal
+
         trade_log[symbol] = {
             "signal": signal,
             "price": price
@@ -99,14 +81,11 @@ def execute_trade(symbol, signal):
 # ===== HOME =====
 @app.route('/')
 def home():
-    return "Bot Running (Symbol Finder Mode)"
+    return "🚀 XRP + SOL Bot Running"
 
 # ===== RUN BOT =====
 @app.route('/run-bot')
 def run_bot():
-    if not SYMBOLS:
-        return jsonify({"error": "No symbols set. Use /all-symbols first."})
-
     results = {}
 
     for symbol in SYMBOLS:
@@ -119,9 +98,10 @@ def run_bot():
         signal = strategy(df)
 
         if signal:
-            results[symbol] = execute_trade(symbol, signal)
+            result = execute_trade(symbol, signal)
+            results[symbol] = result
         else:
-            results[symbol] = "No trade"
+            results[symbol] = "No trade (low volume / no signal)"
 
     return jsonify(results)
 
@@ -130,7 +110,7 @@ def run_bot():
 def status():
     return jsonify(trade_log)
 
-# ===== CURRENT SYMBOLS =====
+# ===== SYMBOL CHECK =====
 @app.route('/symbols')
 def symbols():
     return jsonify(SYMBOLS)
