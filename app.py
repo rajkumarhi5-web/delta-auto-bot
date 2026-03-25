@@ -5,7 +5,7 @@ import os
 
 app = Flask(__name__)
 
-# ✅ Exchange setup (Delta Futures)
+# Exchange setup
 exchange = ccxt.delta({
     'apiKey': os.getenv("API_KEY"),
     'secret': os.getenv("API_SECRET"),
@@ -15,20 +15,19 @@ exchange = ccxt.delta({
     }
 })
 
-# ✅ Working symbols (tested format)
+# ✅ ONLY LOW PRICE COINS
 SYMBOLS = [
-    'BTC/USDT',
-    'ETH/USDT',
     'XRP/USDT',
-    'SOL/USDT'
+    'ADA/USDT',
+    'CAKE/USDT',
+    'GRASS/USDT'
 ]
 
-# Settings
 TIMEFRAME = '5m'
 TRADE_SIZE = 1
 last_signal = {}
 
-# 📊 Get data
+# Get data
 def get_data(symbol):
     try:
         ohlcv = exchange.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=50)
@@ -37,7 +36,7 @@ def get_data(symbol):
     except Exception as e:
         return str(e)
 
-# 📈 Strategy (EMA)
+# Strategy
 def strategy(df):
     df['ema9'] = df['close'].ewm(span=9).mean()
     df['ema21'] = df['close'].ewm(span=21).mean()
@@ -48,7 +47,7 @@ def strategy(df):
         return "sell"
     return None
 
-# 🚀 Execute (SAFE MODE)
+# Execute (safe)
 def execute_trade(symbol, signal):
     global last_signal
 
@@ -56,19 +55,17 @@ def execute_trade(symbol, signal):
         return "No duplicate trade"
 
     last_signal[symbol] = signal
-    return f"{signal.upper()} signal detected (safe mode - no trade)"
+    return f"{signal.upper()} signal (safe mode)"
 
-# 🏠 Home
+# Routes
 @app.route('/')
 def home():
     return "Bot is running"
 
-# 🧪 Test route
 @app.route('/test')
 def test():
     return jsonify({"status": "ok"})
 
-# 🔥 Main bot route (FIXED)
 @app.route('/run-bot')
 def run_bot():
     results = {}
@@ -91,8 +88,7 @@ def run_bot():
         return jsonify(results)
 
     except Exception as e:
-        return jsonify({"fatal_error": str(e)})
+        return jsonify({"error": str(e)})
 
-# 🚀 Run
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
