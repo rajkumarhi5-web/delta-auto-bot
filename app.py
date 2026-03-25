@@ -6,9 +6,11 @@ import time
 app = Flask(__name__)
 
 # API (abhi dummy hai - baad me secure add karenge)
+import os
+
 exchange = ccxt.delta({
-    'apiKey': 'YOUR_API_KEY',
-    'secret': 'YOUR_SECRET',
+    'apiKey': os.getenv("API_KEY"),
+    'secret': os.getenv("API_SECRET"),
     'enableRateLimit': True
 })
 
