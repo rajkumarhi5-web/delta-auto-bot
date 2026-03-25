@@ -11,11 +11,14 @@ import os
 exchange = ccxt.delta({
     'apiKey': os.getenv("API_KEY"),
     'secret': os.getenv("API_SECRET"),
-    'enableRateLimit': True
+    'enableRateLimit': True,
+    'options': {
+        'defaultType': 'future'
+    }
 })
 
 # Coins
-SYMBOLS = ['XRP/USDT', 'ADA/USDT']
+SYMBOLS = ['XRPUSDT', 'ADAUSDT']
 
 # Settings
 TIMEFRAME = '5m'
