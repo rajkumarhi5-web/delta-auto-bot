@@ -5,6 +5,7 @@ import os
 
 app = Flask(__name__)
 
+# Exchange setup
 exchange = ccxt.delta({
     'apiKey': os.getenv("API_KEY"),
     'secret': os.getenv("API_SECRET"),
@@ -14,14 +15,11 @@ exchange = ccxt.delta({
     }
 })
 
-# 🔥 VERY IMPORTANT
-exchange.load_markets()
-
-# ✅ Use correct symbols (Delta supported)
+# ✅ CORRECT SYMBOL FORMAT (DELTA FUTURES)
 SYMBOLS = [
-    'XRP/USD',
-    'ADA/USD',
-    'DOGE/USD'
+    'XRP/USD:USD',
+    'ADA/USD:USD',
+    'DOGE/USD:USD'
 ]
 
 TIMEFRAME = '5m'
@@ -30,7 +28,7 @@ last_signal = {}
 
 def get_data(symbol):
     try:
-        ohlcv = exchange.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=50)
+        ohlcv = exchange.fetch_ohlcv(symbol, TIMEFRAME, limit=50)
         df = pd.DataFrame(ohlcv, columns=['time','open','high','low','close','volume'])
         return df
     except Exception as e:
@@ -44,21 +42,22 @@ def strategy(df):
         return "buy"
     elif df['ema9'].iloc[-1] < df['ema21'].iloc[-1]:
         return "sell"
-    return None
+    else:
+        return None
 
-def execute_trade(symbol, signal, price):
+def execute_trade(symbol, signal):
     global last_signal
 
     if last_signal.get(symbol) == signal:
         return "No duplicate trade"
 
-    last_signal[symbol] = signal
+    try:
+        # 🔒 अभी real trade OFF रखा है safety के लिए
+        last_signal[symbol] = signal
+        return f"{signal.upper()} signal detected (safe mode)"
 
-    return {
-        "signal": signal,
-        "entry": price,
-        "status": "ready"
-    }
+    except Exception as e:
+        return str(e)
 
 @app.route('/')
 def home():
@@ -76,10 +75,10 @@ def run_bot():
             continue
 
         signal = strategy(df)
-        price = df['close'].iloc[-1]
 
         if signal:
-            results[symbol] = execute_trade(symbol, signal, price)
+            result = execute_trade(symbol, signal)
+            results[symbol] = result
         else:
             results[symbol] = "No signal"
 
