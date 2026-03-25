@@ -22,7 +22,7 @@ SYMBOLS = ['XRPUSDT', 'ADAUSDT']
 
 # Settings
 TIMEFRAME = '5m'
-TRADE_SIZE = 5   # small capital friendly
+TRADE_SIZE = 1   # small capital friendly
 last_signal = {}
 
 def get_data(symbol):
