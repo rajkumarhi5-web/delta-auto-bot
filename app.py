@@ -14,23 +14,28 @@ exchange = ccxt.delta({
     }
 })
 
-# 🔥 Best coins (< $2 + active)
-SYMBOLS = ['XRP/USD', 'ADA/USD', 'DOGE/USD', 'WLD/USD', 'WIF/USD']
+# 🔥 VERY IMPORTANT
+exchange.load_markets()
+
+# ✅ Use correct symbols (Delta supported)
+SYMBOLS = [
+    'XRP/USD',
+    'ADA/USD',
+    'DOGE/USD'
+]
 
 TIMEFRAME = '5m'
 TRADE_SIZE = 1
 last_signal = {}
 
-# Data
 def get_data(symbol):
     try:
         ohlcv = exchange.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=50)
         df = pd.DataFrame(ohlcv, columns=['time','open','high','low','close','volume'])
         return df
     except Exception as e:
-        return None
+        return str(e)
 
-# Strategy
 def strategy(df):
     df['ema9'] = df['close'].ewm(span=9).mean()
     df['ema21'] = df['close'].ewm(span=21).mean()
@@ -41,38 +46,20 @@ def strategy(df):
         return "sell"
     return None
 
-# 🚨 REAL TRADE FUNCTION
 def execute_trade(symbol, signal, price):
     global last_signal
 
     if last_signal.get(symbol) == signal:
         return "No duplicate trade"
 
-    try:
-        # Stop Loss & Target
-        if signal == "buy":
-            sl = price * 0.99
-            tp = price * 1.02
-            order = exchange.create_market_buy_order(symbol, TRADE_SIZE)
+    last_signal[symbol] = signal
 
-        elif signal == "sell":
-            sl = price * 1.01
-            tp = price * 0.98
-            order = exchange.create_market_sell_order(symbol, TRADE_SIZE)
+    return {
+        "signal": signal,
+        "entry": price,
+        "status": "ready"
+    }
 
-        last_signal[symbol] = signal
-
-        return {
-            "signal": signal,
-            "entry": price,
-            "stop_loss": sl,
-            "target": tp
-        }
-
-    except Exception as e:
-        return str(e)
-
-# Routes
 @app.route('/')
 def home():
     return "🔥 PRO BOT RUNNING"
@@ -84,8 +71,8 @@ def run_bot():
     for symbol in SYMBOLS:
         df = get_data(symbol)
 
-        if df is None:
-            results[symbol] = "Data error"
+        if isinstance(df, str):
+            results[symbol] = f"Error: {df}"
             continue
 
         signal = strategy(df)
