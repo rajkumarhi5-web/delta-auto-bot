@@ -2,44 +2,47 @@ from flask import Flask, jsonify
 import ccxt
 import pandas as pd
 import os
-import time
-from threading import Thread
 
 app = Flask(__name__)
 
+# ===== EXCHANGE SETUP =====
 exchange = ccxt.delta({
     'apiKey': os.getenv("API_KEY"),
     'secret': os.getenv("API_SECRET"),
     'enableRateLimit': True,
+    'options': {
+        'defaultType': 'future'
+    }
 })
 
-# ✅ FINAL WORKING SYMBOLS
+# ===== CORRECT WORKING SYMBOLS (Delta Futures) =====
 SYMBOLS = [
-    'XRP/USD:USDT',
-    'DOGE/USD:USDT'
+    "XRP/USDT:USDT",
+    "DOGE/USDT:USDT",
+    "WIF/USDT:USDT",
+    "WLD/USDT:USDT",
+    "ADA/USDT:USDT"
 ]
 
 TIMEFRAME = '5m'
-HIGHER_TF = '15m'
+TRADE_SIZE = 1
 
 last_signal = {}
-last_trade_time = {}
+trade_log = {}
 
-COOLDOWN = 300
-
-# ---------------- DATA ----------------
-def get_df(symbol, tf):
+# ===== FETCH DATA =====
+def get_data(symbol):
     try:
-        ohlcv = exchange.fetch_ohlcv(symbol, tf, limit=50)
-        df = pd.DataFrame(ohlcv, columns=['t','o','h','l','c','v'])
+        ohlcv = exchange.fetch_ohlcv(symbol, TIMEFRAME, limit=50)
+        df = pd.DataFrame(ohlcv, columns=['time','open','high','low','close','volume'])
         return df
     except Exception as e:
-        return None
+        return str(e)
 
-# ---------------- STRATEGY ----------------
-def signal(df):
-    df['ema9'] = df['c'].ewm(span=9).mean()
-    df['ema21'] = df['c'].ewm(span=21).mean()
+# ===== STRATEGY =====
+def strategy(df):
+    df['ema9'] = df['close'].ewm(span=9).mean()
+    df['ema21'] = df['close'].ewm(span=21).mean()
 
     if df['ema9'].iloc[-1] > df['ema21'].iloc[-1]:
         return "buy"
@@ -47,76 +50,76 @@ def signal(df):
         return "sell"
     return None
 
-def volume_ok(df):
-    return df['v'].iloc[-1] > df['v'].mean() * 1.5
+# ===== EXECUTE TRADE =====
+def execute_trade(symbol, signal):
+    global last_signal
 
-# ---------------- TRADE ----------------
-def execute(symbol, sig, price):
-    global last_signal, last_trade_time
+    if last_signal.get(symbol) == signal:
+        return "No duplicate trade"
 
-    now = time.time()
+    try:
+        ticker = exchange.fetch_ticker(symbol)
+        price = ticker['last']
 
-    if symbol in last_trade_time and now - last_trade_time[symbol] < COOLDOWN:
-        return "Cooldown"
+        # SAFE MODE (for testing - no real order)
+        result = f"{signal.upper()} signal detected (no real trade)"
 
-    if last_signal.get(symbol) == sig:
-        return "Duplicate"
+        # 👉 LIVE TRADE ENABLE (later uncomment)
+        # if signal == "buy":
+        #     order = exchange.create_market_buy_order(symbol, TRADE_SIZE)
+        # elif signal == "sell":
+        #     order = exchange.create_market_sell_order(symbol, TRADE_SIZE)
+        # result = order
 
-    if sig == "buy":
-        sl = price * 0.99
-        tp = price * 1.02
-    else:
-        sl = price * 1.01
-        tp = price * 0.98
+        last_signal[symbol] = signal
 
-    last_signal[symbol] = sig
-    last_trade_time[symbol] = now
+        trade_log[symbol] = {
+            "signal": signal,
+            "price": price
+        }
 
-    return {
-        "signal": sig,
-        "entry": round(price, 4),
-        "sl": round(sl, 4),
-        "tp": round(tp, 4)
-    }
+        return result
 
-# ---------------- LOOP ----------------
-def bot():
-    while True:
-        for s in SYMBOLS:
-            df = get_df(s, TIMEFRAME)
-            df_htf = get_df(s, HIGHER_TF)
+    except Exception as e:
+        return f"Error: {str(e)}"
 
-            if df is None or df_htf is None:
-                continue
-
-            sig = signal(df)
-            htf = signal(df_htf)
-
-            if not sig or sig != htf:
-                continue
-
-            if not volume_ok(df):
-                continue
-
-            price = df['c'].iloc[-1]
-
-            res = execute(s, sig, price)
-            print("TRADE:", s, res)
-
-        time.sleep(300)
-
-# ---------------- ROUTES ----------------
+# ===== HOME =====
 @app.route('/')
 def home():
-    return "🔥 AUTO BOT PERFECT RUNNING"
+    return "🚀 Pro Bot Running"
 
-# ---------------- START ----------------
-def start():
-    t = Thread(target=bot)
-    t.daemon = True
-    t.start()
+# ===== RUN BOT =====
+@app.route('/run-bot')
+def run_bot():
+    results = {}
 
-start()
+    for symbol in SYMBOLS:
+        df = get_data(symbol)
 
+        if isinstance(df, str):
+            results[symbol] = f"Data error: {df}"
+            continue
+
+        signal = strategy(df)
+
+        if signal:
+            result = execute_trade(symbol, signal)
+            results[symbol] = result
+        else:
+            results[symbol] = "No signal"
+
+    return jsonify(results)
+
+# ===== STATUS =====
+@app.route('/status')
+def status():
+    return jsonify(trade_log)
+
+# ===== SYMBOL CHECK =====
+@app.route('/symbols')
+def symbols():
+    return jsonify(SYMBOLS)
+
+# ===== RUN =====
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
