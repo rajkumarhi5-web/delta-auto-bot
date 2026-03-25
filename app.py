@@ -1,13 +1,11 @@
-from flask import Flask, request, jsonify
+from flask import Flask, jsonify
 import ccxt
 import pandas as pd
-import time
+import os
 
 app = Flask(__name__)
 
-# API (abhi dummy hai - baad me secure add karenge)
-import os
-
+# Exchange setup (secure API)
 exchange = ccxt.delta({
     'apiKey': os.getenv("API_KEY"),
     'secret': os.getenv("API_SECRET"),
@@ -17,19 +15,24 @@ exchange = ccxt.delta({
     }
 })
 
-# Coins
-SYMBOLS = ['XRPUSDT', 'ADAUSDT']
+# Coins (Delta compatible format)
+SYMBOLS = ['XRP/USDT', 'ADA/USDT']
 
 # Settings
 TIMEFRAME = '5m'
-TRADE_SIZE = 1   # small capital friendly
+TRADE_SIZE = 1
 last_signal = {}
 
+# Get market data
 def get_data(symbol):
-    ohlcv = exchange.fetch_ohlcv(symbol, TIMEFRAME, limit=50)
-    df = pd.DataFrame(ohlcv, columns=['time','open','high','low','close','volume'])
-    return df
+    try:
+        ohlcv = exchange.fetch_ohlcv(symbol, TIMEFRAME, limit=50)
+        df = pd.DataFrame(ohlcv, columns=['time','open','high','low','close','volume'])
+        return df
+    except Exception as e:
+        return str(e)
 
+# Strategy (EMA crossover)
 def strategy(df):
     df['ema9'] = df['close'].ewm(span=9).mean()
     df['ema21'] = df['close'].ewm(span=21).mean()
@@ -41,6 +44,7 @@ def strategy(df):
     else:
         return None
 
+# Execute trade (SAFE mode)
 def execute_trade(symbol, signal):
     global last_signal
 
@@ -48,36 +52,44 @@ def execute_trade(symbol, signal):
         return "No duplicate trade"
 
     try:
-        if signal == "buy":
-            order = exchange.create_market_buy_order(symbol, TRADE_SIZE)
-        elif signal == "sell":
-            order = exchange.create_market_sell_order(symbol, TRADE_SIZE)
-
+        # ⚠️ अभी order disable रखा है (testing safe mode)
         last_signal[symbol] = signal
-        return order
+        return f"{signal.upper()} signal detected (no trade executed)"
 
     except Exception as e:
         return str(e)
 
+# Home route
 @app.route('/')
 def home():
     return "Bot is running"
 
+# Run bot
 @app.route('/run-bot')
 def run_bot():
     results = {}
 
-    for symbol in SYMBOLS:
-        df = get_data(symbol)
-        signal = strategy(df)
+    try:
+        for symbol in SYMBOLS:
+            df = get_data(symbol)
 
-        if signal:
-            result = execute_trade(symbol, signal)
-            results[symbol] = result
-        else:
-            results[symbol] = "No signal"
+            # Error handling
+            if isinstance(df, str):
+                results[symbol] = f"Data error: {df}"
+                continue
 
-    return jsonify(results)
+            signal = strategy(df)
+
+            if signal:
+                result = execute_trade(symbol, signal)
+                results[symbol] = result
+            else:
+                results[symbol] = "No signal"
+
+        return jsonify(results)
+
+    except Exception as e:
+        return jsonify({"error": str(e)})
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
