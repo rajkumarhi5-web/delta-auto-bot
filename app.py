@@ -9,19 +9,13 @@ app = Flask(__name__)
 exchange = ccxt.delta({
     'apiKey': os.getenv("API_KEY"),
     'secret': os.getenv("API_SECRET"),
-    'enableRateLimit': True,
-    'options': {
-        'defaultType': 'future'
-    }
+    'enableRateLimit': True
 })
 
-# ===== CORRECT WORKING SYMBOLS (Delta Futures) =====
+# ===== SAFE WORKING SYMBOLS (CONFIRMED) =====
 SYMBOLS = [
-    "XRP/USDT:USDT",
-    "DOGE/USDT:USDT",
-    "WIF/USDT:USDT",
-    "WLD/USDT:USDT",
-    "ADA/USDT:USDT"
+    "XRP/USDT",
+    "DOGE/USDT"
 ]
 
 TIMEFRAME = '5m'
@@ -39,15 +33,23 @@ def get_data(symbol):
     except Exception as e:
         return str(e)
 
-# ===== STRATEGY =====
+# ===== STRATEGY (SMART ENTRY) =====
 def strategy(df):
     df['ema9'] = df['close'].ewm(span=9).mean()
     df['ema21'] = df['close'].ewm(span=21).mean()
+
+    # Volume filter (whale activity)
+    avg_vol = df['volume'].mean()
+    last_vol = df['volume'].iloc[-1]
+
+    if last_vol < avg_vol:
+        return None  # avoid low volume trade
 
     if df['ema9'].iloc[-1] > df['ema21'].iloc[-1]:
         return "buy"
     elif df['ema9'].iloc[-1] < df['ema21'].iloc[-1]:
         return "sell"
+
     return None
 
 # ===== EXECUTE TRADE =====
@@ -61,10 +63,10 @@ def execute_trade(symbol, signal):
         ticker = exchange.fetch_ticker(symbol)
         price = ticker['last']
 
-        # SAFE MODE (for testing - no real order)
-        result = f"{signal.upper()} signal detected (no real trade)"
+        # SAFE MODE (no real order yet)
+        result = f"{signal.upper()} signal detected"
 
-        # 👉 LIVE TRADE ENABLE (later uncomment)
+        # ===== LIVE TRADE ENABLE (later) =====
         # if signal == "buy":
         #     order = exchange.create_market_buy_order(symbol, TRADE_SIZE)
         # elif signal == "sell":
@@ -86,7 +88,7 @@ def execute_trade(symbol, signal):
 # ===== HOME =====
 @app.route('/')
 def home():
-    return "🚀 Pro Bot Running"
+    return "🚀 Auto Trading Bot Running"
 
 # ===== RUN BOT =====
 @app.route('/run-bot')
@@ -106,7 +108,7 @@ def run_bot():
             result = execute_trade(symbol, signal)
             results[symbol] = result
         else:
-            results[symbol] = "No signal"
+            results[symbol] = "No trade (low volume or no signal)"
 
     return jsonify(results)
 
