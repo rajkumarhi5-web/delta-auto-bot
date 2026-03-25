@@ -5,7 +5,6 @@ import os
 
 app = Flask(__name__)
 
-# Exchange setup
 exchange = ccxt.delta({
     'apiKey': os.getenv("API_KEY"),
     'secret': os.getenv("API_SECRET"),
@@ -15,27 +14,21 @@ exchange = ccxt.delta({
     }
 })
 
-# ✅ FINAL COINS (Delta format)
-SYMBOLS = [
-    'XRP/USD',
-    'ADA/USD',
-    'DOGE/USD',
-    'WLD/USD',
-    'WIF/USD'
-]
+# 🔥 Best coins (< $2 + active)
+SYMBOLS = ['XRP/USD', 'ADA/USD', 'DOGE/USD', 'WLD/USD', 'WIF/USD']
 
 TIMEFRAME = '5m'
 TRADE_SIZE = 1
 last_signal = {}
 
-# Get data
+# Data
 def get_data(symbol):
     try:
         ohlcv = exchange.fetch_ohlcv(symbol, timeframe=TIMEFRAME, limit=50)
         df = pd.DataFrame(ohlcv, columns=['time','open','high','low','close','volume'])
         return df
     except Exception as e:
-        return str(e)
+        return None
 
 # Strategy
 def strategy(df):
@@ -48,44 +41,62 @@ def strategy(df):
         return "sell"
     return None
 
-# Execute (safe mode)
-def execute_trade(symbol, signal):
+# 🚨 REAL TRADE FUNCTION
+def execute_trade(symbol, signal, price):
     global last_signal
 
     if last_signal.get(symbol) == signal:
         return "No duplicate trade"
 
-    last_signal[symbol] = signal
-    return f"{signal.upper()} signal (safe mode)"
+    try:
+        # Stop Loss & Target
+        if signal == "buy":
+            sl = price * 0.99
+            tp = price * 1.02
+            order = exchange.create_market_buy_order(symbol, TRADE_SIZE)
+
+        elif signal == "sell":
+            sl = price * 1.01
+            tp = price * 0.98
+            order = exchange.create_market_sell_order(symbol, TRADE_SIZE)
+
+        last_signal[symbol] = signal
+
+        return {
+            "signal": signal,
+            "entry": price,
+            "stop_loss": sl,
+            "target": tp
+        }
+
+    except Exception as e:
+        return str(e)
 
 # Routes
 @app.route('/')
 def home():
-    return "Bot is running"
+    return "🔥 PRO BOT RUNNING"
 
 @app.route('/run-bot')
 def run_bot():
     results = {}
 
-    try:
-        for symbol in SYMBOLS:
-            df = get_data(symbol)
+    for symbol in SYMBOLS:
+        df = get_data(symbol)
 
-            if isinstance(df, str):
-                results[symbol] = f"Error: {df}"
-                continue
+        if df is None:
+            results[symbol] = "Data error"
+            continue
 
-            signal = strategy(df)
+        signal = strategy(df)
+        price = df['close'].iloc[-1]
 
-            if signal:
-                results[symbol] = execute_trade(symbol, signal)
-            else:
-                results[symbol] = "No signal"
+        if signal:
+            results[symbol] = execute_trade(symbol, signal, price)
+        else:
+            results[symbol] = "No signal"
 
-        return jsonify(results)
-
-    except Exception as e:
-        return jsonify({"error": str(e)})
+    return jsonify(results)
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
