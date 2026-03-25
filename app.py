@@ -13,37 +13,31 @@ exchange = ccxt.delta({
     'enableRateLimit': True,
 })
 
-# 🔥 LOAD MARKETS
-markets = exchange.load_markets()
-
-# 🔍 AUTO FIND VALID SYMBOLS
-TARGET_COINS = ['XRP', 'ADA', 'DOGE']
-
-SYMBOLS = []
-for m in markets:
-    for coin in TARGET_COINS:
-        if coin in m and "USDT" in m:
-            SYMBOLS.append(m)
-
-SYMBOLS = list(set(SYMBOLS))[:3]  # limit 3
-
-print("Using symbols:", SYMBOLS)
+# ✅ FINAL WORKING SYMBOLS
+SYMBOLS = [
+    'XRP/USD:USDT',
+    'DOGE/USD:USDT'
+]
 
 TIMEFRAME = '5m'
-TRADE_SIZE = 1
+HIGHER_TF = '15m'
+
 last_signal = {}
+last_trade_time = {}
+
+COOLDOWN = 300
 
 # ---------------- DATA ----------------
-def get_data(symbol):
+def get_df(symbol, tf):
     try:
-        ohlcv = exchange.fetch_ohlcv(symbol, TIMEFRAME, limit=50)
+        ohlcv = exchange.fetch_ohlcv(symbol, tf, limit=50)
         df = pd.DataFrame(ohlcv, columns=['t','o','h','l','c','v'])
         return df
     except Exception as e:
         return None
 
 # ---------------- STRATEGY ----------------
-def strategy(df):
+def signal(df):
     df['ema9'] = df['c'].ewm(span=9).mean()
     df['ema21'] = df['c'].ewm(span=21).mean()
 
@@ -53,37 +47,76 @@ def strategy(df):
         return "sell"
     return None
 
-# ---------------- BOT LOOP ----------------
-def bot_loop():
+def volume_ok(df):
+    return df['v'].iloc[-1] > df['v'].mean() * 1.5
+
+# ---------------- TRADE ----------------
+def execute(symbol, sig, price):
+    global last_signal, last_trade_time
+
+    now = time.time()
+
+    if symbol in last_trade_time and now - last_trade_time[symbol] < COOLDOWN:
+        return "Cooldown"
+
+    if last_signal.get(symbol) == sig:
+        return "Duplicate"
+
+    if sig == "buy":
+        sl = price * 0.99
+        tp = price * 1.02
+    else:
+        sl = price * 1.01
+        tp = price * 0.98
+
+    last_signal[symbol] = sig
+    last_trade_time[symbol] = now
+
+    return {
+        "signal": sig,
+        "entry": round(price, 4),
+        "sl": round(sl, 4),
+        "tp": round(tp, 4)
+    }
+
+# ---------------- LOOP ----------------
+def bot():
     while True:
-        for symbol in SYMBOLS:
-            df = get_data(symbol)
-            if df is None:
+        for s in SYMBOLS:
+            df = get_df(s, TIMEFRAME)
+            df_htf = get_df(s, HIGHER_TF)
+
+            if df is None or df_htf is None:
                 continue
 
-            signal = strategy(df)
+            sig = signal(df)
+            htf = signal(df_htf)
 
-            if signal:
-                print(f"{symbol} -> {signal}")
+            if not sig or sig != htf:
+                continue
+
+            if not volume_ok(df):
+                continue
+
+            price = df['c'].iloc[-1]
+
+            res = execute(s, sig, price)
+            print("TRADE:", s, res)
 
         time.sleep(300)
 
 # ---------------- ROUTES ----------------
 @app.route('/')
 def home():
-    return "🔥 PERFECT AUTO BOT RUNNING"
-
-@app.route('/symbols')
-def symbols():
-    return jsonify(SYMBOLS)
+    return "🔥 AUTO BOT PERFECT RUNNING"
 
 # ---------------- START ----------------
-def start_bot():
-    t = Thread(target=bot_loop)
+def start():
+    t = Thread(target=bot)
     t.daemon = True
     t.start()
 
-start_bot()
+start()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
