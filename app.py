@@ -15,12 +15,13 @@ exchange = ccxt.delta({
     }
 })
 
-# ✅ ONLY LOW PRICE COINS
+# ✅ FINAL COINS (Delta format)
 SYMBOLS = [
-    'XRP/USDT',
-    'ADA/USDT',
-    'CAKE/USDT',
-    'GRASS/USDT'
+    'XRP/USD',
+    'ADA/USD',
+    'DOGE/USD',
+    'WLD/USD',
+    'WIF/USD'
 ]
 
 TIMEFRAME = '5m'
@@ -47,7 +48,7 @@ def strategy(df):
         return "sell"
     return None
 
-# Execute (safe)
+# Execute (safe mode)
 def execute_trade(symbol, signal):
     global last_signal
 
@@ -61,10 +62,6 @@ def execute_trade(symbol, signal):
 @app.route('/')
 def home():
     return "Bot is running"
-
-@app.route('/test')
-def test():
-    return jsonify({"status": "ok"})
 
 @app.route('/run-bot')
 def run_bot():
