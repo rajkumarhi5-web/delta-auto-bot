@@ -65,9 +65,9 @@ def home():
     return "Bot is running"
 
 # Run bot
-@app.route('/run-bot')
-def run_bot():
-    results = {}
+@app.route('/test')
+def test():
+    return jsonify({"status": "ok"})
 
     try:
         for symbol in SYMBOLS:
