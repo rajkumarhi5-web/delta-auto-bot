@@ -16,7 +16,7 @@ exchange = ccxt.delta({
 })
 
 # Coins (Delta compatible format)
-SYMBOLS = ['XRP/USDT', 'ADA/USDT']
+SYMBOLS = ['XRPUSDT', 'ADAUSDT']
 
 # Settings
 TIMEFRAME = '5m'
