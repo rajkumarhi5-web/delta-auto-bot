@@ -2,29 +2,27 @@ from flask import Flask, jsonify
 import ccxt
 import pandas as pd
 import os
+import time
 
 app = Flask(__name__)
 
-# ===== EXCHANGE SETUP =====
+# ===== Exchange Setup =====
 exchange = ccxt.delta({
     'apiKey': os.getenv("API_KEY"),
     'secret': os.getenv("API_SECRET"),
-    'enableRateLimit': True
+    'enableRateLimit': True,
+    'options': {
+        'defaultType': 'future'
+    }
 })
 
-# ===== FINAL SYMBOLS =====
-SYMBOLS = [
-    "XRP/USDT",
-    "SOL/USDT"
-]
-
+# ===== SETTINGS =====
+SYMBOLS = ["XRP/USDT", "SOL/USDT"]
 TIMEFRAME = '5m'
-TRADE_SIZE = 1
-
+TRADE_SIZE = 2   # small capital safe
 last_signal = {}
-trade_log = {}
 
-# ===== FETCH DATA =====
+# ===== DATA FETCH =====
 def get_data(symbol):
     try:
         ohlcv = exchange.fetch_ohlcv(symbol, TIMEFRAME, limit=50)
@@ -33,21 +31,35 @@ def get_data(symbol):
     except Exception as e:
         return str(e)
 
-# ===== STRATEGY (SMART + SAFE) =====
+# ===== RSI CALC =====
+def calculate_rsi(df, period=14):
+    delta = df['close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(period).mean()
+    rs = gain / loss
+    df['rsi'] = 100 - (100 / (1 + rs))
+    return df
+
+# ===== STRATEGY =====
 def strategy(df):
     df['ema9'] = df['close'].ewm(span=9).mean()
     df['ema21'] = df['close'].ewm(span=21).mean()
+    df = calculate_rsi(df)
 
-    # Volume filter (important 🔥)
-    avg_vol = df['volume'].mean()
-    last_vol = df['volume'].iloc[-1]
+    last = df.iloc[-1]
 
-    if last_vol < avg_vol:
+    # Volume filter
+    avg_vol = df['volume'].rolling(10).mean().iloc[-1]
+
+    if last['volume'] < avg_vol:
         return None
 
-    if df['ema9'].iloc[-1] > df['ema21'].iloc[-1]:
+    # BUY
+    if last['ema9'] > last['ema21'] and last['rsi'] > 55:
         return "buy"
-    elif df['ema9'].iloc[-1] < df['ema21'].iloc[-1]:
+
+    # SELL
+    elif last['ema9'] < last['ema21'] and last['rsi'] < 45:
         return "sell"
 
     return None
@@ -60,30 +72,24 @@ def execute_trade(symbol, signal):
         return "No duplicate trade"
 
     try:
-        ticker = exchange.fetch_ticker(symbol)
-        price = ticker['last']
+        if signal == "buy":
+            order = exchange.create_market_buy_order(symbol, TRADE_SIZE)
 
-        # SAFE MODE (no real trade yet)
-        result = f"{signal.upper()} signal detected"
+        elif signal == "sell":
+            order = exchange.create_market_sell_order(symbol, TRADE_SIZE)
 
         last_signal[symbol] = signal
-
-        trade_log[symbol] = {
-            "signal": signal,
-            "price": price
-        }
-
-        return result
+        return f"{signal.upper()} executed"
 
     except Exception as e:
-        return f"Error: {str(e)}"
+        return f"Trade error: {str(e)}"
 
-# ===== HOME =====
+# ===== ROUTES =====
+
 @app.route('/')
 def home():
-    return "🚀 XRP + SOL Bot Running"
+    return "PRO BOT RUNNING 🚀"
 
-# ===== RUN BOT =====
 @app.route('/run-bot')
 def run_bot():
     results = {}
@@ -92,7 +98,7 @@ def run_bot():
         df = get_data(symbol)
 
         if isinstance(df, str):
-            results[symbol] = f"Data error: {df}"
+            results[symbol] = df
             continue
 
         signal = strategy(df)
@@ -101,20 +107,31 @@ def run_bot():
             result = execute_trade(symbol, signal)
             results[symbol] = result
         else:
-            results[symbol] = "No trade (low volume / no signal)"
+            results[symbol] = "No trade (filtered)"
 
     return jsonify(results)
 
-# ===== STATUS =====
-@app.route('/status')
-def status():
-    return jsonify(trade_log)
+# ===== AUTO LOOP (IMPORTANT) =====
+@app.route('/auto')
+def auto_trade():
+    results = {}
 
-# ===== SYMBOL CHECK =====
-@app.route('/symbols')
-def symbols():
-    return jsonify(SYMBOLS)
+    for symbol in SYMBOLS:
+        df = get_data(symbol)
 
-# ===== RUN =====
+        if isinstance(df, str):
+            results[symbol] = df
+            continue
+
+        signal = strategy(df)
+
+        if signal:
+            result = execute_trade(symbol, signal)
+            results[symbol] = result
+        else:
+            results[symbol] = "No trade"
+
+    return jsonify(results)
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
