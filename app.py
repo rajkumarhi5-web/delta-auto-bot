@@ -3,7 +3,6 @@ import ccxt
 import pandas as pd
 import os
 import requests
-import traceback
 
 app = Flask(__name__)
 
@@ -39,7 +38,7 @@ def send_telegram(msg):
         requests.post(url, data={
             "chat_id": TG_CHAT_ID,
             "text": msg
-        }, timeout=5)
+        })
     except Exception as e:
         print("Telegram Error:", e)
 
@@ -50,12 +49,14 @@ def get_data():
     ohlcv = exchange.fetch_ohlcv(SYMBOL, TIMEFRAME, limit=100)
     df = pd.DataFrame(ohlcv, columns=['t','o','h','l','c','v'])
 
+    # RSI
     delta = df['c'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
     rs = gain / loss
     df['rsi'] = 100 - (100 / (1 + rs))
 
+    # EMA
     df['ema20'] = df['c'].ewm(span=20).mean()
     df['ema50'] = df['c'].ewm(span=50).mean()
 
@@ -88,28 +89,26 @@ def execute_trade(side):
         balance = exchange.fetch_balance()
         usdt = balance['USDT']['free']
 
-        if usdt < 2:
+        if usdt < 1:
             return "Low balance"
 
         price = exchange.fetch_ticker(SYMBOL)['last']
 
-        risk = usdt * 0.40  # safer
-        qty = (risk * LEVERAGE) / price
-
-        qty = round(qty, 3)  # safer precision
+        risk = usdt * 0.4
+        qty = round((risk * LEVERAGE) / price, 1)
 
         if qty <= 0:
-            return "Qty too low"
+            return "Qty low"
 
         order = exchange.create_market_order(SYMBOL, side, qty)
-        entry = order.get('average') or price
+        entry = order['average'] if order['average'] else price
 
         if side == "buy":
-            sl = entry * 0.993
-            tp = entry * 1.015
+            sl = entry * 0.992
+            tp = entry * 1.012
         else:
-            sl = entry * 1.007
-            tp = entry * 0.985
+            sl = entry * 1.008
+            tp = entry * 0.988
 
         open_positions[SYMBOL] = {
             "side": side,
@@ -119,16 +118,14 @@ def execute_trade(side):
         }
 
         send_telegram(
-            f"✅ OPEN\n{side.upper()} {SYMBOL}\nEntry: {entry:.4f}\nSL: {sl:.4f}\nTP: {tp:.4f}"
+            f"✅ TRADE OPENED\n{side.upper()} {SYMBOL}\nEntry: {entry}\nSL: {sl}\nTP: {tp}"
         )
 
         return f"Entered {side}"
 
     except Exception as e:
-        error = str(e)
-        print("TRADE ERROR:", error)
-        send_telegram(f"❌ Trade Error:\n{error}")
-        return error
+        send_telegram(f"❌ Trade Error: {str(e)}")
+        return str(e)
 
 # =========================
 # 🔄 MANAGE TRADE
@@ -145,27 +142,27 @@ def manage_trade():
 
         if pos['side'] == "buy":
             if price >= pos['tp'] or price <= pos['sl']:
-                side = "sell"
                 close = True
+                side = "sell"
         else:
             if price <= pos['tp'] or price >= pos['sl']:
-                side = "buy"
                 close = True
+                side = "buy"
 
         if close:
             exchange.create_market_order(SYMBOL, side, pos['qty'])
-            send_telegram(f"❌ CLOSED @ {price:.4f}")
+            send_telegram(f"❌ TRADE CLOSED @ {price}")
             del open_positions[SYMBOL]
 
     except Exception as e:
-        print("Manage Error:", traceback.format_exc())
+        print("Manage Error:", e)
 
 # =========================
 # 🌐 ROUTES
 # =========================
 @app.route('/')
 def home():
-    return "SCALPING BOT LIVE 🚀"
+    return "BOT LIVE 🚀"
 
 @app.route('/run-bot')
 def run_bot():
@@ -180,19 +177,23 @@ def run_bot():
 
         manage_trade()
 
+        # 🔥 ALWAYS TELEGRAM UPDATE
+        send_telegram(f"📊 Price: {df.iloc[-1]['c']} | Signal: {result}")
+
         return jsonify({
-            "price": float(df.iloc[-1]['c']),
+            "price": df.iloc[-1]['c'],
             "status": result
         })
 
     except Exception as e:
+        send_telegram(f"❌ BOT ERROR: {str(e)}")
         return str(e)
 
 # =========================
 # ▶ START
 # =========================
 if __name__ == "__main__":
-    send_telegram("🚀 BOT STARTED")
+    send_telegram("🚀 BOT STARTED SUCCESSFULLY")
 
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
