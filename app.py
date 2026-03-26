@@ -10,8 +10,8 @@ app = Flask(__name__)
 # 🔐 EXCHANGE SETUP
 # =========================
 exchange = ccxt.delta({
-    'apiKey': os.getenv("API_KEY"),
-    'secret': os.getenv("API_SECRET"),
+    'apiKey': os.getenv("5wQreSSDQbqxAZcLOQMv61ptbH3eaC"),
+    'secret': os.getenv("YZknLE5SuxIL1QlYs4A3tJyGXhuYB6x8h2XeoDamfd7eoQPw9839eFbbBlk1"),
     'enableRateLimit': True,
     'options': {'defaultType': 'future'}
 })
@@ -19,8 +19,8 @@ exchange = ccxt.delta({
 # =========================
 # 📲 TELEGRAM SETUP
 # =========================
-BOT_TOKEN = os.getenv("TG_TOKEN")
-CHAT_ID = os.getenv("TG_CHAT_ID")
+BOT_TOKEN = os.getenv("8342650836:AAGv6nROjx2OQ6DOeRqR18tG1YAa0uHRc_w")
+CHAT_ID = os.getenv("7092256542")
 
 def send_telegram(msg):
     try:
