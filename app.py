@@ -3,6 +3,8 @@ import ccxt
 import pandas as pd
 import os
 import requests
+import time
+import threading
 
 app = Flask(__name__)
 
@@ -28,6 +30,7 @@ TIMEFRAME = '5m'
 LEVERAGE = 3
 
 open_positions = {}
+last_trade_time = 0
 
 # =========================
 # 📩 TELEGRAM
@@ -39,8 +42,8 @@ def send_telegram(msg):
             "chat_id": TG_CHAT_ID,
             "text": msg
         })
-    except Exception as e:
-        print("Telegram Error:", e)
+    except:
+        pass
 
 # =========================
 # 📊 DATA
@@ -49,14 +52,12 @@ def get_data():
     ohlcv = exchange.fetch_ohlcv(SYMBOL, TIMEFRAME, limit=100)
     df = pd.DataFrame(ohlcv, columns=['t','o','h','l','c','v'])
 
-    # RSI
     delta = df['c'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
     rs = gain / loss
     df['rsi'] = 100 - (100 / (1 + rs))
 
-    # EMA
     df['ema20'] = df['c'].ewm(span=20).mean()
     df['ema50'] = df['c'].ewm(span=50).mean()
 
@@ -80,17 +81,23 @@ def get_signal(df):
 # 🚀 EXECUTE TRADE
 # =========================
 def execute_trade(side):
+    global last_trade_time
+
     try:
         if SYMBOL in open_positions:
-            return "Already in trade"
+            return
+
+        # 🔒 Cooldown (avoid overtrading)
+        if time.time() - last_trade_time < 120:
+            return
 
         exchange.set_leverage(LEVERAGE, SYMBOL)
 
         balance = exchange.fetch_balance()
         usdt = balance['USDT']['free']
 
-        if usdt < 1:
-            return "Low balance"
+        if usdt < 2:
+            return
 
         price = exchange.fetch_ticker(SYMBOL)['last']
 
@@ -98,7 +105,7 @@ def execute_trade(side):
         qty = round((risk * LEVERAGE) / price, 1)
 
         if qty <= 0:
-            return "Qty low"
+            return
 
         order = exchange.create_market_order(SYMBOL, side, qty)
         entry = order['average'] if order['average'] else price
@@ -117,15 +124,14 @@ def execute_trade(side):
             "tp": tp
         }
 
+        last_trade_time = time.time()
+
         send_telegram(
             f"✅ TRADE OPENED\n{side.upper()} {SYMBOL}\nEntry: {entry}\nSL: {sl}\nTP: {tp}"
         )
 
-        return f"Entered {side}"
-
     except Exception as e:
         send_telegram(f"❌ Trade Error: {str(e)}")
-        return str(e)
 
 # =========================
 # 🔄 MANAGE TRADE
@@ -158,42 +164,38 @@ def manage_trade():
         print("Manage Error:", e)
 
 # =========================
+# 🔁 AUTO LOOP
+# =========================
+def bot_loop():
+    send_telegram("🚀 AUTO BOT STARTED")
+
+    while True:
+        try:
+            df = get_data()
+            signal = get_signal(df)
+
+            if signal:
+                execute_trade(signal)
+
+            manage_trade()
+
+        except Exception as e:
+            print("Loop Error:", e)
+
+        time.sleep(60)  # 🔥 every 1 min
+
+# =========================
 # 🌐 ROUTES
 # =========================
 @app.route('/')
 def home():
-    return "BOT LIVE 🚀"
-
-@app.route('/run-bot')
-def run_bot():
-    try:
-        df = get_data()
-        signal = get_signal(df)
-
-        result = "No Signal"
-
-        if signal:
-            result = execute_trade(signal)
-
-        manage_trade()
-
-        # 🔥 ALWAYS TELEGRAM UPDATE
-        send_telegram(f"📊 Price: {df.iloc[-1]['c']} | Signal: {result}")
-
-        return jsonify({
-            "price": df.iloc[-1]['c'],
-            "status": result
-        })
-
-    except Exception as e:
-        send_telegram(f"❌ BOT ERROR: {str(e)}")
-        return str(e)
+    return "AUTO BOT RUNNING 🔁"
 
 # =========================
 # ▶ START
 # =========================
 if __name__ == "__main__":
-    send_telegram("🚀 BOT STARTED SUCCESSFULLY")
+    threading.Thread(target=bot_loop).start()
 
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
