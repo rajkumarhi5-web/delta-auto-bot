@@ -1,8 +1,8 @@
 from flask import Flask, jsonify
 import ccxt
 import pandas as pd
-import time
 import os
+import requests
 
 app = Flask(__name__)
 
@@ -13,37 +13,40 @@ exchange = ccxt.delta({
     'apiKey': os.getenv("API_KEY"),
     'secret': os.getenv("API_SECRET"),
     'enableRateLimit': True,
-    'options': {
-        'defaultType': 'future'
-    }
+    'options': {'defaultType': 'future'}
 })
+
+# =========================
+# 📲 TELEGRAM SETUP
+# =========================
+BOT_TOKEN = os.getenv("TG_TOKEN")
+CHAT_ID = os.getenv("TG_CHAT_ID")
+
+def send_telegram(msg):
+    try:
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        requests.post(url, data={"chat_id": CHAT_ID, "text": msg})
+    except:
+        pass
 
 # =========================
 # ⚙️ SETTINGS
 # =========================
 SYMBOLS = [
-    SYMBOLS = [
     "XRP/USDT",
     "SOL/USDT",
     "DOGE/USDT:USDT"
 ]
 
 TIMEFRAME = '5m'
-RISK_PER_TRADE = 0.2   # 20% capital use
+RISK_PER_TRADE = 0.2
 LEVERAGE = 5
 
-# Track open trades
 open_positions = {}
 
 # =========================
 # 📊 INDICATORS
 # =========================
-def get_data(symbol):
-    ohlcv = exchange.fetch_ohlcv(symbol, TIMEFRAME, limit=50)
-    df = pd.DataFrame(ohlcv, columns=['time','open','high','low','close','volume'])
-    df['rsi'] = compute_rsi(df['close'])
-    return df
-
 def compute_rsi(series, period=14):
     delta = series.diff()
     gain = (delta.where(delta > 0, 0)).rolling(period).mean()
@@ -51,13 +54,17 @@ def compute_rsi(series, period=14):
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
+def get_data(symbol):
+    ohlcv = exchange.fetch_ohlcv(symbol, TIMEFRAME, limit=50)
+    df = pd.DataFrame(ohlcv, columns=['time','open','high','low','close','volume'])
+    df['rsi'] = compute_rsi(df['close'])
+    return df
+
 # =========================
 # 🧠 SIGNAL LOGIC
 # =========================
 def get_signal(df):
     last = df.iloc[-1]
-
-    # Volume spike
     vol_avg = df['volume'].rolling(20).mean().iloc[-1]
 
     if last['volume'] > vol_avg * 1.5:
@@ -76,9 +83,9 @@ def get_position_size(symbol):
     usdt = balance['USDT']['free']
 
     amount = usdt * RISK_PER_TRADE
-    ticker = exchange.fetch_ticker(symbol)
+    price = exchange.fetch_ticker(symbol)['last']
 
-    qty = amount / ticker['last']
+    qty = amount / price
     return round(qty, 2)
 
 # =========================
@@ -94,10 +101,8 @@ def execute_trade(symbol, side):
         qty = get_position_size(symbol)
 
         order = exchange.create_market_order(symbol, side.lower(), qty)
+        entry_price = order['average'] or order['price']
 
-        entry_price = order['average']
-
-        # SL / TP
         if side == "BUY":
             sl = entry_price * 0.98
             tp = entry_price * 1.04
@@ -109,39 +114,68 @@ def execute_trade(symbol, side):
             "side": side,
             "entry": entry_price,
             "sl": sl,
-            "tp": tp
+            "tp": tp,
+            "qty": qty
         }
 
-        return f"{side} executed at {entry_price}"
+        send_telegram(f"""
+🚀 TRADE OPENED
+
+Symbol: {symbol}
+Side: {side}
+Entry: {entry_price}
+
+SL: {sl}
+TP: {tp}
+Qty: {qty}
+Leverage: {LEVERAGE}x
+""")
+
+        return f"{side} executed"
 
     except Exception as e:
         return f"Error: {str(e)}"
 
 # =========================
-# 🔄 MONITOR TRADES
+# 🔄 MANAGE TRADES
 # =========================
 def manage_trades():
     results = {}
 
     for symbol, pos in list(open_positions.items()):
         try:
-            ticker = exchange.fetch_ticker(symbol)
-            price = ticker['last']
+            price = exchange.fetch_ticker(symbol)['last']
 
             if pos['side'] == "BUY":
                 if price <= pos['sl'] or price >= pos['tp']:
-                    exchange.create_market_order(symbol, "sell", get_position_size(symbol))
-                    results[symbol] = "Closed (SL/TP)"
+                    exchange.create_market_order(symbol, "sell", pos['qty'])
+
+                    send_telegram(f"""
+✅ TRADE CLOSED
+
+Symbol: {symbol}
+Exit Price: {price}
+Result: SL/TP Hit
+""")
+
                     del open_positions[symbol]
 
             elif pos['side'] == "SELL":
                 if price >= pos['sl'] or price <= pos['tp']:
-                    exchange.create_market_order(symbol, "buy", get_position_size(symbol))
-                    results[symbol] = "Closed (SL/TP)"
+                    exchange.create_market_order(symbol, "buy", pos['qty'])
+
+                    send_telegram(f"""
+✅ TRADE CLOSED
+
+Symbol: {symbol}
+Exit Price: {price}
+Result: SL/TP Hit
+""")
+
                     del open_positions[symbol]
 
         except Exception as e:
-            results[symbol] = f"Error: {str(e)}"
+            results[symbol] = str(e)
 
     return results
 
@@ -164,10 +198,7 @@ def run_bot():
         except Exception as e:
             results[symbol] = f"Data error: {str(e)}"
 
-    # Manage existing trades
-    manage = manage_trades()
-    results.update(manage)
-
+    manage_trades()
     return results
 
 # =========================
@@ -185,6 +216,9 @@ def run():
 def status():
     return jsonify(open_positions)
 
+# =========================
+# ▶️ START SERVER
+# =========================
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
