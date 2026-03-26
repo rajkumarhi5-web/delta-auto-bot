@@ -15,7 +15,7 @@ TG_TOKEN = os.getenv("TG_TOKEN")
 TG_CHAT_ID = os.getenv("TG_CHAT_ID")
 
 # =========================
-# 🔐 EXCHANGE SETUP
+# 🔐 EXCHANGE
 # =========================
 exchange = ccxt.delta({
     'apiKey': API_KEY,
@@ -26,6 +26,7 @@ exchange = ccxt.delta({
 SYMBOL = "XRP/USDT"
 TIMEFRAME = '15m'
 LEVERAGE = 3
+
 open_positions = {}
 
 # =========================
@@ -44,8 +45,8 @@ def send_telegram(msg):
 # =========================
 # 📊 DATA + INDICATORS
 # =========================
-def get_data(symbol):
-    ohlcv = exchange.fetch_ohlcv(symbol, TIMEFRAME, limit=100)
+def get_data():
+    ohlcv = exchange.fetch_ohlcv(SYMBOL, TIMEFRAME, limit=100)
     df = pd.DataFrame(ohlcv, columns=['t','o','h','l','c','v'])
 
     delta = df['c'].diff()
@@ -54,26 +55,27 @@ def get_data(symbol):
     rs = gain / loss
     df['rsi'] = 100 - (100 / (1 + rs))
 
-    df['ema_50'] = df['c'].ewm(span=50).mean()
+    df['ema'] = df['c'].ewm(span=50).mean()
+
     return df
 
 # =========================
-# 🧠 SIGNAL LOGIC
+# 🧠 SIGNAL
 # =========================
-def signal(df):
+def get_signal(df):
     last = df.iloc[-1]
     prev = df.iloc[-2]
 
-    if last['c'] > last['ema_50'] and prev['rsi'] < 40 and last['rsi'] > 40:
+    if last['c'] > last['ema'] and prev['rsi'] < 40 and last['rsi'] > 40:
         return "buy"
 
-    if last['c'] < last['ema_50'] and prev['rsi'] > 60 and last['rsi'] < 60:
+    if last['c'] < last['ema'] and prev['rsi'] > 60 and last['rsi'] < 60:
         return "sell"
 
     return None
 
 # =========================
-# 🚀 EXECUTE TRADE
+# 🚀 TRADE EXECUTION
 # =========================
 def execute_trade(side):
     try:
@@ -85,11 +87,20 @@ def execute_trade(side):
         balance = exchange.fetch_balance()
         usdt = balance['USDT']['free']
 
+        if usdt < 1:
+            return "Low balance"
+
         price = exchange.fetch_ticker(SYMBOL)['last']
 
-        qty = round(((usdt * 0.9) * LEVERAGE) / price, 1)
+        # ✅ SAFE RISK (30%)
+        risk = usdt * 0.3
+        qty = round((risk * LEVERAGE) / price, 1)
+
+        if qty <= 0:
+            return "Qty too low"
 
         order = exchange.create_market_order(SYMBOL, side, qty)
+
         entry = order['average'] if order['average'] else price
 
         sl = entry * 0.985 if side == "buy" else entry * 1.015
@@ -104,7 +115,7 @@ def execute_trade(side):
 
         send_telegram(
             f"✅ TRADE OPENED\n"
-            f"Side: {side.upper()}\n"
+            f"{side.upper()} {SYMBOL}\n"
             f"Entry: {entry}\nSL: {sl}\nTP: {tp}"
         )
 
@@ -130,15 +141,17 @@ def manage_trade():
         if pos['side'] == "buy":
             if price >= pos['tp'] or price <= pos['sl']:
                 close = True
-                side = "sell"
+                exit_side = "sell"
         else:
             if price <= pos['tp'] or price >= pos['sl']:
                 close = True
-                side = "buy"
+                exit_side = "buy"
 
         if close:
-            exchange.create_market_order(SYMBOL, side, pos['qty'])
+            exchange.create_market_order(SYMBOL, exit_side, pos['qty'])
+
             send_telegram(f"❌ TRADE CLOSED @ {price}")
+
             del open_positions[SYMBOL]
 
     except Exception as e:
@@ -147,46 +160,26 @@ def manage_trade():
 # =========================
 # 🌐 ROUTES
 # =========================
-
 @app.route('/')
 def home():
-    return "BOT IS RUNNING 🚀"
+    return "BOT LIVE 🚀"
 
-# 🔍 DEBUG CHECK
-@app.route('/test')
-def test():
-    return {
-        "API_KEY": API_KEY,
-        "API_SECRET": "OK" if API_SECRET else "MISSING",
-        "TG_TOKEN": "OK" if TG_TOKEN else "MISSING",
-        "TG_CHAT_ID": TG_CHAT_ID
-    }
-
-# 💰 BALANCE CHECK
-@app.route('/balance')
-def balance():
-    try:
-        return exchange.fetch_balance()
-    except Exception as e:
-        return str(e)
-
-# 🤖 RUN BOT
 @app.route('/run-bot')
 def run_bot():
     try:
-        df = get_data(SYMBOL)
-        sig = signal(df)
+        df = get_data()
+        signal = get_signal(df)
 
         result = "No Signal"
 
-        if sig:
-            result = execute_trade(sig)
+        if signal:
+            result = execute_trade(signal)
 
         manage_trade()
 
         return jsonify({
-            "status": result,
-            "price": df.iloc[-1]['c']
+            "price": df.iloc[-1]['c'],
+            "status": result
         })
 
     except Exception as e:
@@ -196,7 +189,7 @@ def run_bot():
 # ▶ START
 # =========================
 if __name__ == "__main__":
-    send_telegram("🚀 BOT STARTED SUCCESSFULLY")
+    send_telegram("🚀 BOT STARTED (SAFE MODE)")
 
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
