@@ -7,7 +7,7 @@ import requests
 app = Flask(__name__)
 
 # =========================
-# 🔐 ENV VARIABLES
+# 🔐 ENV
 # =========================
 API_KEY = os.getenv("API_KEY")
 API_SECRET = os.getenv("API_SECRET")
@@ -24,7 +24,7 @@ exchange = ccxt.delta({
 })
 
 SYMBOL = "XRP/USDT"
-TIMEFRAME = '15m'
+TIMEFRAME = '5m'   # 🔥 fast trades
 LEVERAGE = 3
 
 open_positions = {}
@@ -39,43 +39,45 @@ def send_telegram(msg):
             "chat_id": TG_CHAT_ID,
             "text": msg
         })
-    except Exception as e:
-        print("Telegram Error:", e)
+    except:
+        pass
 
 # =========================
-# 📊 DATA + INDICATORS
+# 📊 DATA
 # =========================
 def get_data():
     ohlcv = exchange.fetch_ohlcv(SYMBOL, TIMEFRAME, limit=100)
     df = pd.DataFrame(ohlcv, columns=['t','o','h','l','c','v'])
 
+    # RSI
     delta = df['c'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
     rs = gain / loss
     df['rsi'] = 100 - (100 / (1 + rs))
 
-    df['ema'] = df['c'].ewm(span=50).mean()
+    # EMA
+    df['ema20'] = df['c'].ewm(span=20).mean()
+    df['ema50'] = df['c'].ewm(span=50).mean()
 
     return df
 
 # =========================
-# 🧠 SIGNAL
+# 🧠 SIGNAL (SCALPING)
 # =========================
 def get_signal(df):
     last = df.iloc[-1]
-    prev = df.iloc[-2]
 
-    if last['c'] > last['ema'] and prev['rsi'] < 40 and last['rsi'] > 40:
+    if last['c'] > last['ema20'] > last['ema50'] and last['rsi'] > 52:
         return "buy"
 
-    if last['c'] < last['ema'] and prev['rsi'] > 60 and last['rsi'] < 60:
+    if last['c'] < last['ema20'] < last['ema50'] and last['rsi'] < 48:
         return "sell"
 
     return None
 
 # =========================
-# 🚀 TRADE EXECUTION
+# 🚀 EXECUTE TRADE
 # =========================
 def execute_trade(side):
     try:
@@ -92,19 +94,23 @@ def execute_trade(side):
 
         price = exchange.fetch_ticker(SYMBOL)['last']
 
-        # ✅ SAFE RISK (30%)
+        # 🔥 SAFE RISK (30%)
         risk = usdt * 0.3
         qty = round((risk * LEVERAGE) / price, 1)
 
         if qty <= 0:
-            return "Qty too low"
+            return "Qty low"
 
         order = exchange.create_market_order(SYMBOL, side, qty)
-
         entry = order['average'] if order['average'] else price
 
-        sl = entry * 0.985 if side == "buy" else entry * 1.015
-        tp = entry * 1.03 if side == "buy" else entry * 0.97
+        # 🔥 SCALPING TP/SL
+        if side == "buy":
+            sl = entry * 0.992
+            tp = entry * 1.012
+        else:
+            sl = entry * 1.008
+            tp = entry * 0.988
 
         open_positions[SYMBOL] = {
             "side": side,
@@ -114,9 +120,7 @@ def execute_trade(side):
         }
 
         send_telegram(
-            f"✅ TRADE OPENED\n"
-            f"{side.upper()} {SYMBOL}\n"
-            f"Entry: {entry}\nSL: {sl}\nTP: {tp}"
+            f"✅ TRADE OPENED\n{side.upper()} {SYMBOL}\nEntry: {entry}\nSL: {sl}\nTP: {tp}"
         )
 
         return f"Entered {side}"
@@ -141,17 +145,15 @@ def manage_trade():
         if pos['side'] == "buy":
             if price >= pos['tp'] or price <= pos['sl']:
                 close = True
-                exit_side = "sell"
+                side = "sell"
         else:
             if price <= pos['tp'] or price >= pos['sl']:
                 close = True
-                exit_side = "buy"
+                side = "buy"
 
         if close:
-            exchange.create_market_order(SYMBOL, exit_side, pos['qty'])
-
+            exchange.create_market_order(SYMBOL, side, pos['qty'])
             send_telegram(f"❌ TRADE CLOSED @ {price}")
-
             del open_positions[SYMBOL]
 
     except Exception as e:
@@ -162,7 +164,7 @@ def manage_trade():
 # =========================
 @app.route('/')
 def home():
-    return "BOT LIVE 🚀"
+    return "SCALPING BOT LIVE 🚀"
 
 @app.route('/run-bot')
 def run_bot():
@@ -189,7 +191,7 @@ def run_bot():
 # ▶ START
 # =========================
 if __name__ == "__main__":
-    send_telegram("🚀 BOT STARTED (SAFE MODE)")
+    send_telegram("🚀 SCALPING BOT STARTED")
 
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
