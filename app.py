@@ -93,7 +93,7 @@ def execute_trade(side):
 
         price = exchange.fetch_ticker(SYMBOL)['last']
 
-        risk = usdt * 0.25  # safer
+        risk = usdt * 0.40  # safer
         qty = (risk * LEVERAGE) / price
 
         qty = round(qty, 3)  # safer precision
