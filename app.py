@@ -22,10 +22,10 @@ exchange = ccxt.delta({
 # ⚙️ SETTINGS
 # =========================
 SYMBOLS = [
+    SYMBOLS = [
     "XRP/USDT",
     "SOL/USDT",
-    "DOGE/USDT",
-    "TRX/USDT"
+    "DOGE/USDT:USDT"
 ]
 
 TIMEFRAME = '5m'
