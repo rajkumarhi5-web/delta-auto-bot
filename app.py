@@ -1,138 +1,186 @@
 from flask import Flask, jsonify
 import ccxt
 import pandas as pd
-import os
 import time
-import threading
+import os
 
 app = Flask(__name__)
 
-# ===== Exchange =====
+# =========================
+# 🔐 EXCHANGE SETUP
+# =========================
 exchange = ccxt.delta({
     'apiKey': os.getenv("API_KEY"),
     'secret': os.getenv("API_SECRET"),
     'enableRateLimit': True,
-    'options': {'defaultType': 'future'}
+    'options': {
+        'defaultType': 'future'
+    }
 })
 
-# ===== SETTINGS =====
-SYMBOLS = ["XRP/USDT", "SOL/USDT"]
+# =========================
+# ⚙️ SETTINGS
+# =========================
+SYMBOLS = [
+    "XRP/USDT",
+    "SOL/USDT",
+    "DOGE/USDT",
+    "TRX/USDT"
+]
+
 TIMEFRAME = '5m'
-TRADE_SIZE = 2
-SL_PERCENT = 0.01
-TP_PERCENT = 0.02
+RISK_PER_TRADE = 0.2   # 20% capital use
+LEVERAGE = 5
 
-last_signal = {}
+# Track open trades
+open_positions = {}
 
-# ===== DATA =====
+# =========================
+# 📊 INDICATORS
+# =========================
 def get_data(symbol):
-    try:
-        ohlcv = exchange.fetch_ohlcv(symbol, TIMEFRAME, limit=50)
-        df = pd.DataFrame(ohlcv, columns=['time','open','high','low','close','volume'])
-        return df
-    except Exception as e:
-        return None
-
-# ===== RSI =====
-def calculate_rsi(df, period=14):
-    delta = df['close'].diff()
-    gain = delta.clip(lower=0).rolling(period).mean()
-    loss = -delta.clip(upper=0).rolling(period).mean()
-    rs = gain / loss
-    df['rsi'] = 100 - (100 / (1 + rs))
+    ohlcv = exchange.fetch_ohlcv(symbol, TIMEFRAME, limit=50)
+    df = pd.DataFrame(ohlcv, columns=['time','open','high','low','close','volume'])
+    df['rsi'] = compute_rsi(df['close'])
     return df
 
-# ===== STRATEGY =====
-def strategy(df):
-    df['ema9'] = df['close'].ewm(span=9).mean()
-    df['ema21'] = df['close'].ewm(span=21).mean()
-    df = calculate_rsi(df)
+def compute_rsi(series, period=14):
+    delta = series.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(period).mean()
+    rs = gain / loss
+    return 100 - (100 / (1 + rs))
 
+# =========================
+# 🧠 SIGNAL LOGIC
+# =========================
+def get_signal(df):
     last = df.iloc[-1]
-    avg_vol = df['volume'].rolling(10).mean().iloc[-1]
 
-    if last['volume'] < avg_vol:
-        return None
+    # Volume spike
+    vol_avg = df['volume'].rolling(20).mean().iloc[-1]
 
-    if last['ema9'] > last['ema21'] and last['rsi'] > 55:
-        return "buy"
-
-    elif last['ema9'] < last['ema21'] and last['rsi'] < 45:
-        return "sell"
+    if last['volume'] > vol_avg * 1.5:
+        if last['rsi'] < 35:
+            return "BUY"
+        elif last['rsi'] > 65:
+            return "SELL"
 
     return None
 
-# ===== TRADE =====
-def execute_trade(symbol, signal):
-    global last_signal
+# =========================
+# 💰 POSITION SIZE
+# =========================
+def get_position_size(symbol):
+    balance = exchange.fetch_balance()
+    usdt = balance['USDT']['free']
 
-    if last_signal.get(symbol) == signal:
-        return
+    amount = usdt * RISK_PER_TRADE
+    ticker = exchange.fetch_ticker(symbol)
 
+    qty = amount / ticker['last']
+    return round(qty, 2)
+
+# =========================
+# ⚡ EXECUTE TRADE
+# =========================
+def execute_trade(symbol, side):
     try:
-        ticker = exchange.fetch_ticker(symbol)
-        price = ticker['last']
+        if symbol in open_positions:
+            return "Already in trade"
 
-        if signal == "buy":
-            exchange.create_market_buy_order(symbol, TRADE_SIZE)
-            sl = price * (1 - SL_PERCENT)
-            tp = price * (1 + TP_PERCENT)
-            side = "sell"
+        exchange.set_leverage(LEVERAGE, symbol)
 
+        qty = get_position_size(symbol)
+
+        order = exchange.create_market_order(symbol, side.lower(), qty)
+
+        entry_price = order['average']
+
+        # SL / TP
+        if side == "BUY":
+            sl = entry_price * 0.98
+            tp = entry_price * 1.04
         else:
-            exchange.create_market_sell_order(symbol, TRADE_SIZE)
-            sl = price * (1 + SL_PERCENT)
-            tp = price * (1 - TP_PERCENT)
-            side = "buy"
+            sl = entry_price * 1.02
+            tp = entry_price * 0.96
 
-        # SL
-        exchange.create_order(
-            symbol,
-            'stop_market',
-            side,
-            TRADE_SIZE,
-            None,
-            {'stopPrice': round(sl, 4)}
-        )
+        open_positions[symbol] = {
+            "side": side,
+            "entry": entry_price,
+            "sl": sl,
+            "tp": tp
+        }
 
-        # TP
-        exchange.create_limit_order(
-            symbol,
-            side,
-            TRADE_SIZE,
-            round(tp, 4)
-        )
-
-        last_signal[symbol] = signal
-        print(f"{symbol} {signal.upper()} | SL {sl} TP {tp}")
+        return f"{side} executed at {entry_price}"
 
     except Exception as e:
-        print(f"Trade error: {e}")
+        return f"Error: {str(e)}"
 
-# ===== AUTO LOOP =====
-def auto_trading():
-    while True:
-        print("Running bot cycle...")
+# =========================
+# 🔄 MONITOR TRADES
+# =========================
+def manage_trades():
+    results = {}
 
-        for symbol in SYMBOLS:
+    for symbol, pos in list(open_positions.items()):
+        try:
+            ticker = exchange.fetch_ticker(symbol)
+            price = ticker['last']
+
+            if pos['side'] == "BUY":
+                if price <= pos['sl'] or price >= pos['tp']:
+                    exchange.create_market_order(symbol, "sell", get_position_size(symbol))
+                    results[symbol] = "Closed (SL/TP)"
+                    del open_positions[symbol]
+
+            elif pos['side'] == "SELL":
+                if price >= pos['sl'] or price <= pos['tp']:
+                    exchange.create_market_order(symbol, "buy", get_position_size(symbol))
+                    results[symbol] = "Closed (SL/TP)"
+                    del open_positions[symbol]
+
+        except Exception as e:
+            results[symbol] = f"Error: {str(e)}"
+
+    return results
+
+# =========================
+# 🚀 BOT RUNNER
+# =========================
+def run_bot():
+    results = {}
+
+    for symbol in SYMBOLS:
+        try:
             df = get_data(symbol)
-            if df is None:
-                continue
-
-            signal = strategy(df)
+            signal = get_signal(df)
 
             if signal:
-                execute_trade(symbol, signal)
+                results[symbol] = execute_trade(symbol, signal)
+            else:
+                results[symbol] = "No trade"
 
-        time.sleep(300)  # 5 min
+        except Exception as e:
+            results[symbol] = f"Data error: {str(e)}"
 
-# ===== START THREAD =====
-threading.Thread(target=auto_trading).start()
+    # Manage existing trades
+    manage = manage_trades()
+    results.update(manage)
 
-# ===== HEALTH CHECK =====
+    return results
+
+# =========================
+# 🌐 ROUTES
+# =========================
 @app.route('/')
 def home():
     return "AUTO BOT RUNNING 24/7 🚀"
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+@app.route('/run-bot')
+def run():
+    return jsonify(run_bot())
+
+@app.route('/status')
+def status():
+    return jsonify(open_positions)
