@@ -1,10 +1,13 @@
-from flask import Flask, jsonify
+from flask import Flask
 import ccxt
 import pandas as pd
 import os
 import requests
 import time
 import threading
+from dotenv import load_dotenv
+
+load_dotenv()
 
 app = Flask(__name__)
 
@@ -87,7 +90,6 @@ def execute_trade(side):
         if SYMBOL in open_positions:
             return
 
-        # 🔒 Cooldown (avoid overtrading)
         if time.time() - last_trade_time < 120:
             return
 
@@ -100,15 +102,11 @@ def execute_trade(side):
             return
 
         price = exchange.fetch_ticker(SYMBOL)['last']
-
         risk = usdt * 0.4
         qty = round((risk * LEVERAGE) / price, 1)
 
-        if qty <= 0:
-            return
-
         order = exchange.create_market_order(SYMBOL, side, qty)
-        entry = order['average'] if order['average'] else price
+        entry = order['average'] or price
 
         if side == "buy":
             sl = entry * 0.992
@@ -126,9 +124,7 @@ def execute_trade(side):
 
         last_trade_time = time.time()
 
-        send_telegram(
-            f"✅ TRADE OPENED\n{side.upper()} {SYMBOL}\nEntry: {entry}\nSL: {sl}\nTP: {tp}"
-        )
+        send_telegram(f"✅ {side.upper()} {SYMBOL}\nEntry: {entry}\nSL: {sl}\nTP: {tp}")
 
     except Exception as e:
         send_telegram(f"❌ Trade Error: {str(e)}")
@@ -157,17 +153,17 @@ def manage_trade():
 
         if close:
             exchange.create_market_order(SYMBOL, side, pos['qty'])
-            send_telegram(f"❌ TRADE CLOSED @ {price}")
+            send_telegram(f"❌ CLOSED @ {price}")
             del open_positions[SYMBOL]
 
     except Exception as e:
         print("Manage Error:", e)
 
 # =========================
-# 🔁 AUTO LOOP
+# 🔁 LOOP
 # =========================
 def bot_loop():
-    send_telegram("🚀 AUTO BOT STARTED")
+    send_telegram("🚀 BOT STARTED")
 
     while True:
         try:
@@ -182,20 +178,10 @@ def bot_loop():
         except Exception as e:
             print("Loop Error:", e)
 
-        time.sleep(60)  # 🔥 every 1 min
-
-# =========================
-# 🌐 ROUTES
-# =========================
-@app.route('/')
-def home():
-    return "AUTO BOT RUNNING 🔁"
+        time.sleep(60)
 
 # =========================
 # ▶ START
 # =========================
 if __name__ == "__main__":
-    threading.Thread(target=bot_loop).start()
-
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    bot_loop()
