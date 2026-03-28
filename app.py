@@ -5,23 +5,14 @@ import os
 import requests
 import time
 import threading
-from dotenv import load_dotenv
-
-load_dotenv()
 
 app = Flask(__name__)
 
-# =========================
-# 🔐 ENV
-# =========================
 API_KEY = os.getenv("API_KEY")
 API_SECRET = os.getenv("API_SECRET")
 TG_TOKEN = os.getenv("TG_TOKEN")
 TG_CHAT_ID = os.getenv("TG_CHAT_ID")
 
-# =========================
-# 🔐 EXCHANGE
-# =========================
 exchange = ccxt.delta({
     'apiKey': API_KEY,
     'secret': API_SECRET,
@@ -35,22 +26,13 @@ LEVERAGE = 3
 open_positions = {}
 last_trade_time = 0
 
-# =========================
-# 📩 TELEGRAM
-# =========================
 def send_telegram(msg):
     try:
         url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
-        requests.post(url, data={
-            "chat_id": TG_CHAT_ID,
-            "text": msg
-        })
+        requests.post(url, data={"chat_id": TG_CHAT_ID, "text": msg})
     except:
         pass
 
-# =========================
-# 📊 DATA
-# =========================
 def get_data():
     ohlcv = exchange.fetch_ohlcv(SYMBOL, TIMEFRAME, limit=100)
     df = pd.DataFrame(ohlcv, columns=['t','o','h','l','c','v'])
@@ -66,9 +48,6 @@ def get_data():
 
     return df
 
-# =========================
-# 🧠 SIGNAL
-# =========================
 def get_signal(df):
     last = df.iloc[-1]
 
@@ -80,9 +59,6 @@ def get_signal(df):
 
     return None
 
-# =========================
-# 🚀 EXECUTE TRADE
-# =========================
 def execute_trade(side):
     global last_trade_time
 
@@ -105,8 +81,11 @@ def execute_trade(side):
         risk = usdt * 0.4
         qty = round((risk * LEVERAGE) / price, 1)
 
+        if qty <= 0:
+            return
+
         order = exchange.create_market_order(SYMBOL, side, qty)
-        entry = order['average'] or price
+        entry = order['average'] if order['average'] else price
 
         if side == "buy":
             sl = entry * 0.992
@@ -124,14 +103,11 @@ def execute_trade(side):
 
         last_trade_time = time.time()
 
-        send_telegram(f"✅ {side.upper()} {SYMBOL}\nEntry: {entry}\nSL: {sl}\nTP: {tp}")
+        send_telegram(f"TRADE OPENED {side} {SYMBOL}")
 
     except Exception as e:
-        send_telegram(f"❌ Trade Error: {str(e)}")
+        send_telegram(f"Error: {str(e)}")
 
-# =========================
-# 🔄 MANAGE TRADE
-# =========================
 def manage_trade():
     if SYMBOL not in open_positions:
         return
@@ -140,30 +116,21 @@ def manage_trade():
         pos = open_positions[SYMBOL]
         price = exchange.fetch_ticker(SYMBOL)['last']
 
-        close = False
-
         if pos['side'] == "buy":
             if price >= pos['tp'] or price <= pos['sl']:
-                close = True
-                side = "sell"
+                exchange.create_market_order(SYMBOL, "sell", pos['qty'])
+                del open_positions[SYMBOL]
+
         else:
             if price <= pos['tp'] or price >= pos['sl']:
-                close = True
-                side = "buy"
+                exchange.create_market_order(SYMBOL, "buy", pos['qty'])
+                del open_positions[SYMBOL]
 
-        if close:
-            exchange.create_market_order(SYMBOL, side, pos['qty'])
-            send_telegram(f"❌ CLOSED @ {price}")
-            del open_positions[SYMBOL]
+    except:
+        pass
 
-    except Exception as e:
-        print("Manage Error:", e)
-
-# =========================
-# 🔁 LOOP
-# =========================
 def bot_loop():
-    send_telegram("🚀 BOT STARTED")
+    send_telegram("BOT STARTED")
 
     while True:
         try:
@@ -175,13 +142,15 @@ def bot_loop():
 
             manage_trade()
 
-        except Exception as e:
-            print("Loop Error:", e)
+        except:
+            pass
 
         time.sleep(60)
 
-# =========================
-# ▶ START
-# =========================
+@app.route('/')
+def home():
+    return "BOT RUNNING"
+
 if __name__ == "__main__":
-    bot_loop()
+    threading.Thread(target=bot_loop).start()
+    app.run(host="0.0.0.0", port=10000)
